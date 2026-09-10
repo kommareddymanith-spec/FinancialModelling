@@ -167,13 +167,126 @@ on a cadence at least as long as the window:
 Nothing here closes positions — this is an entry-signal engine. Exits (a
 time stop, a trailing stop, next-day close) are yours to add.
 
+## Backtesting
+
+```bash
+python -m wsj_headline_trader.backtest_cli --benchmark-only \
+    --start 2024-09-01 --end 2026-08-31
+```
+
+### The benchmark: $1,000/month into the S&P 500
+
+This is a real result, computed from the vendored monthly index series
+(`data/sp500_monthly.csv`, provenance in `data/SOURCES.md`):
+
+```
+                                Index DCA (1,000/mo)
+------------------------------------------------------
+Period                      2024-09-01 to 2026-08-01
+Contributed                                24,000.00
+Final value                                28,869.72
+Profit                                      4,869.72
+Profit on contributions                      +20.29%
+Money-weighted return p.a.                   +20.55%
+Time-weighted return total                   +37.18%
+Time-weighted return p.a.                    +17.96%
+Max drawdown                                 -11.08%
+Volatility p.a.                              +11.51%
+Sharpe                                          1.50
+Purchases                                         24
+Units held                                    3.7438
+Average cost                                6,410.58
+```
+
+Twenty-four monthly purchases at an average cost of 6,410.58 against a closing
+level of 7,711.32. Three caveats, all of which make this number *conservative*
+as a stand-in for an index fund:
+
+- **Price return only.** The source's dividend column is empty for recent
+  months, so this excludes dividends. A real fund reinvests them, adding
+  roughly 1.2–1.5% a year.
+- **Monthly average prices, not month-end closes.** The Shiller series averages
+  each month's daily closes. For a monthly savings plan that is a defensible
+  purchase price, but it is not a month-end mark.
+- **Drawdown is measured on monthly data**, so it understates the true
+  intramonth low.
+
+### The strategy leg: why there is no number here
+
+**The strategy cannot be backtested on the data it trades on.** WSJ RSS feeds
+serve only the current ~30 items and carry no history at all, so there is
+nothing to replay. This is a property of the feeds, not of this environment.
+
+The engine to run it is built, tested and ready — it just needs an archive:
+
+```bash
+python -m wsj_headline_trader.backtest_cli \
+    --archive path/to/wsj_headlines.jsonl \
+    --prices  path/to/daily_bars.csv \
+    --start 2024-09-01 --end 2026-08-31 --trades
+```
+
+**Historical headline data** — the options, with their real costs:
+
+| Source | Covers | Catch |
+|---|---|---|
+| Dow Jones Factiva / DNA | Full WSJ text, decades | Paid licence; the canonical answer |
+| RavenPack, Refinitiv News Analytics | Pre-scored WSJ sentiment | Paid; sentiment already computed |
+| [GDELT 2.0](https://www.gdeltproject.org/) | Titles + URLs by domain, 2015– | Free; titles only, some gaps |
+| Wayback Machine snapshots of the RSS URLs | Whatever was captured | Free; irregular capture cadence |
+| Common Crawl `CC-NEWS` | Raw article HTML | Free; heavy ETL to get titles |
+
+Archives load from `.jsonl`, `.json`, `.csv` or saved `.xml` feeds — see
+`wsj_headline_trader/archive.py`. The minimum per record is a timestamp and a
+title:
+
+```json
+{"published_at": "2025-03-04T14:30:00Z", "title": "Nvidia Shares Surge on Blowout Results"}
+```
+
+**Price data** needs a long-format panel covering every ticker the strategy
+might trade:
+
+```csv
+date,symbol,open,high,low,close
+2025-03-04,NVDA,112.50,114.20,111.80,113.90
+```
+
+`open`/`high`/`low` are optional and fall back to the close, though stops and
+targets need highs and lows to mean anything.
+
+### What the engine does, and what it refuses to do
+
+- **No look-ahead.** A signal decided at time *t* fills at the open of the
+  first session whose bell is strictly after *t*. A headline published mid-session
+  cannot be traded at that session's open.
+- **Same cash flows as the benchmark.** The strategy receives the same
+  $1,000/month. Comparing a fully-funded strategy against a plan that drip-feeds
+  cash would flatter whichever got its money in first.
+- **Costs are charged.** Slippage (default 5bp each way), commission, and short
+  borrow (default 3%/yr, accrued daily). A strategy that turns over this often
+  is not cost-insensitive.
+- **Unfilled orders are counted, not hidden.** Signals in symbols with no price
+  data, or with no cash behind them, appear in the `skipped` breakdown, so
+  coverage gaps cannot pass for good behaviour.
+- **Stops beat targets** when one bar spans both, because the intrabar path is
+  unknown.
+- **Reported P&L is real cash.** `net_pnl` summed over closed trades plus
+  contributions equals the final equity, exactly — asserted in the test suite,
+  including with costs on and on the short side.
+
+Two measures are reported because they answer different questions:
+money-weighted return (IRR) is what your contributions actually earned and is
+the right cross-plan comparison; time-weighted return strips contributions out
+and is what drawdown, volatility and Sharpe are computed from.
+
 ## Tests
 
 ```bash
 cd trading && PYTHONPATH=. python3 -m unittest discover -s tests -t .
 ```
 
-135 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
+266 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
 feeds written for the suite, not WSJ content.
 
 ## Layout
@@ -186,8 +299,15 @@ feeds written for the suite, not WSJ content.
 | `wsj_headline_trader/strategy.py` | Ranking, gating, sizing |
 | `wsj_headline_trader/broker.py` | `PaperBroker` and `AlpacaBroker` |
 | `wsj_headline_trader/algorithm.py` | Orchestration and reporting |
-| `wsj_headline_trader/cli.py` | Command line interface |
+| `wsj_headline_trader/cli.py` | Live command line interface |
+| `wsj_headline_trader/backtest.py` | Walk-forward replay engine |
+| `wsj_headline_trader/benchmark.py` | Monthly index savings plan |
+| `wsj_headline_trader/metrics.py` | IRR, TWR, drawdown, Sharpe |
+| `wsj_headline_trader/prices.py` | Price series and panel loading |
+| `wsj_headline_trader/archive.py` | Historical headline loading |
+| `wsj_headline_trader/backtest_cli.py` | Backtest command line interface |
 | `wsj_headline_trader/data/universe.json` | 207 companies, editable |
+| `data/sp500_monthly.csv` | S&P 500 monthly, 1990–2026 (see `data/SOURCES.md`) |
 
 ## Caveats
 

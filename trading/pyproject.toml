@@ -13,6 +13,7 @@ dependencies = []
 
 [project.scripts]
 wsj-headline-trader = "wsj_headline_trader.cli:main"
+wsj-headline-backtest = "wsj_headline_trader.backtest_cli:main"
 
 [tool.setuptools]
 packages = ["wsj_headline_trader"]
