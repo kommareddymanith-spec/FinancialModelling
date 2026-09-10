@@ -1,2 +1,7 @@
 **/.pbi/localSettings.json
 **/.pbi/cache.abf
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/

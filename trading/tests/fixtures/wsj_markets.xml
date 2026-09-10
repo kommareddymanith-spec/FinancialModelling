@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>WSJ.com: Markets</title>
+    <link>https://www.wsj.com</link>
+    <description>Fixture feed for tests. Not real WSJ content.</description>
+    <item>
+      <title>Nvidia Shares Surge as Data-Center Revenue Beats Expectations</title>
+      <description>The chip maker topped estimates and raised guidance for the current quarter.</description>
+      <link>https://www.wsj.com/articles/7306266330</link>
+      <pubDate>Thu, 10 Sep 2026 15:25:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Nvidia Extends Rally After Blowout Results</title>
+      <description>Investors pushed Nvidia stock to a record high in early trading.</description>
+      <link>https://www.wsj.com/articles/9445530274</link>
+      <pubDate>Thu, 10 Sep 2026 15:18:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Analysts Upgrade Nvidia on Accelerating Demand</title>
+      <description>Two brokers lifted their outlook, citing robust order momentum.</description>
+      <link>https://www.wsj.com/articles/6378997448</link>
+      <pubDate>Thu, 10 Sep 2026 15:12:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Boeing Slides After Regulator Halts 787 Deliveries</title>
+      <description>Boeing shares fell as the FAA opened an investigation into fuselage gaps.</description>
+      <link>https://www.wsj.com/articles/2911915585</link>
+      <pubDate>Thu, 10 Sep 2026 15:08:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Boeing Warns of Wider Loss on Delivery Delays</title>
+      <description>The plane maker cut guidance and disclosed a fresh charge.</description>
+      <link>https://www.wsj.com/articles/2503690691</link>
+      <pubDate>Thu, 10 Sep 2026 14:59:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Boeing Faces Class Action Over Safety Disclosures</title>
+      <description>Shareholders sued, alleging the company understated known defects.</description>
+      <link>https://www.wsj.com/articles/9993465631</link>
+      <pubDate>Thu, 10 Sep 2026 14:46:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Ford Beats Expectations but Cuts Outlook on Weak EV Demand</title>
+      <description>Ford stock slipped as the carmaker warned on pricing.</description>
+      <link>https://www.wsj.com/articles/1034584340</link>
+      <pubDate>Thu, 10 Sep 2026 14:42:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Investors Target Small-Cap Stocks as the Rally Broadens</title>
+      <description>The gap between large and small caps narrowed this week.</description>
+      <link>https://www.wsj.com/articles/6559049884</link>
+      <pubDate>Thu, 10 Sep 2026 14:35:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Treasury Yields Rise Ahead of Inflation Data</title>
+      <description>Bond investors braced for a hotter reading.</description>
+      <link>https://www.wsj.com/articles/2342513741</link>
+      <pubDate>Thu, 10 Sep 2026 14:32:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Nvidia Announced a Stock Split Last Month</title>
+      <description>This article is outside the one-hour window and must be ignored.</description>
+      <link>https://www.wsj.com/articles/9035998110</link>
+      <pubDate>Thu, 10 Sep 2026 13:58:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

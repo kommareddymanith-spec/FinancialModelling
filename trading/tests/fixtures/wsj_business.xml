@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>WSJ.com: US Business</title>
+    <link>https://www.wsj.com</link>
+    <description>Fixture feed for tests. Not real WSJ content.</description>
+    <item>
+      <title>Target Shares Slide as Retailer Cuts Guidance</title>
+      <description>Target said sales weakened through the quarter and profit will miss expectations.</description>
+      <link>https://www.wsj.com/articles/5946367482</link>
+      <pubDate>Thu, 10 Sep 2026 15:21:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Target&#x27;s Loss Widens on Markdowns</title>
+      <description>The retailer reported a shortfall and announced job cuts.</description>
+      <link>https://www.wsj.com/articles/2176118447</link>
+      <pubDate>Thu, 10 Sep 2026 15:04:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Pfizer Wins Approval for New Cancer Therapy</title>
+      <description>Pfizer stock gained on the breakthrough decision.</description>
+      <link>https://www.wsj.com/articles/8592769242</link>
+      <pubDate>Thu, 10 Sep 2026 14:55:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Pfizer Secures Landmark Supply Deal</title>
+      <description>The drugmaker strikes a deal worth billions, boosting its outlook.</description>
+      <link>https://www.wsj.com/articles/6569837132</link>
+      <pubDate>Thu, 10 Sep 2026 14:49:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Apple (AAPL) Faces Fresh Antitrust Probe in Europe</title>
+      <description>Regulators opened an investigation into App Store terms.</description>
+      <link>https://www.wsj.com/articles/3747261270</link>
+      <pubDate>Thu, 10 Sep 2026 14:38:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
