@@ -15,6 +15,7 @@ dependencies = []
 wsj-headline-trader = "wsj_headline_trader.cli:main"
 wsj-headline-backtest = "wsj_headline_trader.backtest_cli:main"
 wsj-headline-pine = "wsj_headline_trader.pine_cli:main"
+wsj-headline-simulate = "wsj_headline_trader.simulate_cli:main"
 
 [tool.setuptools]
 packages = ["wsj_headline_trader"]

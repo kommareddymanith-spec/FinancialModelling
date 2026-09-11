@@ -17,11 +17,12 @@ from .algorithm import AlgorithmConfig, WSJHeadlineAlgorithm, format_report
 from .archive import load_archive
 from .backtest import BacktestConfig, BacktestResult, Trade, run_backtest
 from .benchmark import DcaConfig, DcaResult, run_dca
-from .broker import AlpacaBroker, PaperBroker, StaticPriceProvider
+from .broker import AlpacaBroker, AlpacaPriceProvider, PaperBroker, StaticPriceProvider
 from .metrics import PerformanceSummary, format_comparison, irr, summarise
 from .pine import PineSignal, render as render_pine
 from .models import Headline, Mention, Order, OrderResult, RunReport, Side, Signal
 from .prices import PricePanel, load_price_panel, load_series
+from .simulate import MarketConfig, SyntheticMarket, generate_market, run_simulation
 from .sentiment import score_text
 from .strategy import StrategyConfig, build_signals, extract_mentions
 from .universe import Company, Universe
@@ -31,12 +32,14 @@ __version__ = "1.0.0"
 __all__ = [
     "AlgorithmConfig",
     "AlpacaBroker",
+    "AlpacaPriceProvider",
     "BacktestConfig",
     "BacktestResult",
     "Company",
     "DcaConfig",
     "DcaResult",
     "Headline",
+    "MarketConfig",
     "Mention",
     "Order",
     "OrderResult",
@@ -49,6 +52,7 @@ __all__ = [
     "Signal",
     "StaticPriceProvider",
     "StrategyConfig",
+    "SyntheticMarket",
     "Trade",
     "Universe",
     "WSJHeadlineAlgorithm",
@@ -56,6 +60,7 @@ __all__ = [
     "extract_mentions",
     "format_comparison",
     "format_report",
+    "generate_market",
     "irr",
     "load_archive",
     "load_price_panel",
@@ -63,6 +68,7 @@ __all__ = [
     "render_pine",
     "run_backtest",
     "run_dca",
+    "run_simulation",
     "score_text",
     "summarise",
 ]

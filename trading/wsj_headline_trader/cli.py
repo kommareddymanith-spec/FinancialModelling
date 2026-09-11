@@ -15,7 +15,7 @@ import logging
 import sys
 
 from .algorithm import AlgorithmConfig, WSJHeadlineAlgorithm, append_signal_log, format_report
-from .broker import AlpacaBroker, BrokerError, PaperBroker
+from .broker import AlpacaBroker, AlpacaPriceProvider, BrokerError, PaperBroker
 from .feed import DEFAULT_FEEDS, fetch_feed, headlines_from_files
 from .strategy import StrategyConfig
 from .universe import Universe
@@ -88,6 +88,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually submit orders. Without it the run is a dry run.",
     )
     execution.add_argument(
+        "--paper-marks",
+        choices=("flat", "alpaca"),
+        default="flat",
+        help=(
+            "How the paper broker prices fills. 'flat' uses a fixed notional "
+            "price, so positions never move; 'alpaca' marks at real last-traded "
+            "prices (needs Alpaca credentials, still risks nothing)."
+        ),
+    )
+    execution.add_argument(
         "--real-money",
         action="store_true",
         help="With --broker alpaca, use the live endpoint instead of paper.",
@@ -154,6 +164,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.broker == "alpaca":
         try:
             broker = AlpacaBroker(paper=not args.real_money)
+        except BrokerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+    elif args.paper_marks == "alpaca":
+        try:
+            broker = PaperBroker(prices=AlpacaPriceProvider())
         except BrokerError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2

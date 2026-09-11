@@ -281,6 +281,113 @@ money-weighted return (IRR) is what your contributions actually earned and is
 the right cross-plan comparison; time-weighted return strips contributions out
 and is what drawdown, volatility and Sharpe are computed from.
 
+## Testing it in a dummy market
+
+Three ways to exercise the algorithm without risking money, in increasing
+order of realism.
+
+### 1. Simulated market (no account, no data, instant)
+
+A synthetic market — random price paths and generated headlines — with the
+*real* pipeline replayed over it, so there is no second implementation that
+could disagree with production.
+
+```bash
+python -m wsj_headline_trader.simulate_cli --days 252 --edge 0.01 --seed 7 --trades
+```
+
+The point is not the return figure; synthetic returns say nothing about real
+markets. The point is two experiments you cannot run any other way.
+
+**The null test.** Set `--edge 0` and the headlines are pure noise,
+uncorrelated with prices. A correct engine must then earn roughly zero before
+costs, and roughly minus the costs after:
+
+```bash
+python -m wsj_headline_trader.simulate_cli --edge 0 --seeds 30
+```
+```
+  Strategy time-weighted return
+    mean        -4.46%   (standard error 3.36%)
+    spread      -36.6% to +29.6%   (stdev 18.39%)
+    profitable  37% of runs
+```
+
+A mean within a couple of standard errors of zero is the **correct** result. A
+clear profit here would mean the engine is manufacturing returns — look-ahead,
+double-counted P&L, a sizing bug — and is the first thing to check after any
+change to the backtest.
+
+**The power test.** Give the headlines real predictive content and the engine
+must find it. `--sweep` walks the edge from nothing to obvious:
+
+```bash
+python -m wsj_headline_trader.simulate_cli --sweep --seeds 20
+```
+```
+  edge/event   mean TWR    median    stderr  profitable   vs null
+  0.000         -3.34%     -8.47%     4.08%        35%
+  0.002         +4.18%     -0.79%     4.22%        50%   +1.8 SE
+  0.005        +15.85%    +12.30%     4.44%        75%   +4.3 SE
+  0.010        +37.01%    +36.10%     5.07%       100%   +8.0 SE
+  0.020        +85.49%    +86.69%     6.54%       100%  +13.6 SE
+  0.030       +143.33%   +141.96%     8.60%       100%  +17.0 SE
+```
+
+Read that as a **requirement**: the strategy needs roughly **0.5% of genuine
+predictive drift per news event** before it clears noise and costs. Below
+that, it cannot tell itself apart from the null. Whether WSJ headlines carry
+half a percent is the open question this repo cannot answer.
+
+The other thing the null row shows is variance: ±18% standard deviation over a
+single simulated year, from noise alone. That is why a two-year live result
+would not distinguish skill from luck.
+
+### 2. Paper broker against live headlines (minutes to set up)
+
+Real WSJ feeds, fake fills, no account needed:
+
+```bash
+python -m wsj_headline_trader --live --broker paper -v
+```
+
+By default the paper broker prices everything at a flat notional, so positions
+never move — fine for checking plumbing, useless for P&L. Mark against the real
+market instead (still risks nothing, needs Alpaca credentials for the data):
+
+```bash
+python -m wsj_headline_trader --live --broker paper --paper-marks alpaca
+```
+
+### 3. Alpaca paper account (the real dummy market)
+
+Real prices, real headlines, real order lifecycle, fake money. This is the
+closest thing to a live test and the one worth running for weeks:
+
+```bash
+export APCA_API_KEY_ID=...  APCA_API_SECRET_KEY=...
+python -m wsj_headline_trader --live --broker alpaca --log-signals signals.jsonl
+```
+
+Alpaca defaults to its paper endpoint, so `--real-money` is required before
+anything touches a funded account. Adding `--log-signals` means the same runs
+accumulate the history that `pine_cli` turns into a TradingView chart.
+
+### Which to use
+
+| | Simulated | Paper broker | Alpaca paper |
+|---|---|---|---|
+| Needs an account | no | no | free |
+| Needs network | no | yes | yes |
+| Real prices | no | with `--paper-marks alpaca` | yes |
+| Real headlines | no | yes | yes |
+| Tests engine correctness | **yes** | no | no |
+| Tests the actual edge | no | partly | **yes, given time** |
+| Time to a result | seconds | one run | weeks |
+
+The simulator answers "is my engine correct". Only Alpaca paper, run for long
+enough, starts to answer "does this strategy work".
+
 ## TradingView
 
 **The strategy cannot run on TradingView.** Pine Script executes inside
@@ -373,7 +480,7 @@ survive going negative, and the IRR search terminates on extreme cashflows.
 cd trading && PYTHONPATH=. python3 -m unittest discover -s tests -t .
 ```
 
-327 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
+351 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
 feeds written for the suite, not WSJ content.
 
 ## Layout
@@ -395,6 +502,8 @@ feeds written for the suite, not WSJ content.
 | `wsj_headline_trader/backtest_cli.py` | Backtest command line interface |
 | `wsj_headline_trader/pine.py` | TradingView Pine Script generator |
 | `wsj_headline_trader/pine_cli.py` | Signal log to Pine command line interface |
+| `wsj_headline_trader/simulate.py` | Synthetic market and the null/power experiments |
+| `wsj_headline_trader/simulate_cli.py` | Simulation command line interface |
 | `wsj_headline_trader/data/universe.json` | 207 companies, editable |
 | `data/sp500_monthly.csv` | S&P 500 monthly, 1990–2026 (see `data/SOURCES.md`) |
 

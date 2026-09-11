@@ -53,6 +53,47 @@ class StaticPriceProvider:
         return self.prices.get(symbol, self.default)
 
 
+@dataclass
+class AlpacaPriceProvider:
+    """Real last-traded prices for marking a paper book.
+
+    :class:`PaperBroker` defaults to a flat notional price, which is fine for
+    tests but means positions never move. Point it at this instead and a paper
+    run marks against the live market while still risking nothing.
+    """
+
+    key_id: str | None = None
+    secret_key: str | None = None
+    data_url: str = ALPACA_DATA_URL
+    timeout: float = 15.0
+
+    def __post_init__(self) -> None:
+        self.key_id = self.key_id or os.environ.get("APCA_API_KEY_ID")
+        self.secret_key = self.secret_key or os.environ.get("APCA_API_SECRET_KEY")
+        if not self.key_id or not self.secret_key:
+            raise BrokerError(
+                "Alpaca credentials missing: set APCA_API_KEY_ID and "
+                "APCA_API_SECRET_KEY to mark a paper book at real prices"
+            )
+
+    def last_price(self, symbol: str) -> float | None:
+        request = urllib.request.Request(
+            f"{self.data_url}/v2/stocks/{symbol}/trades/latest",
+            headers={
+                "APCA-API-KEY-ID": self.key_id or "",
+                "APCA-API-SECRET-KEY": self.secret_key or "",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read() or b"{}")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+            log.warning("price lookup failed for %s: %s", symbol, exc)
+            return None
+        price = body.get("trade", {}).get("p")
+        return float(price) if price else None
+
+
 class Broker(Protocol):
     """The only thing the algorithm needs from an execution venue."""
 
