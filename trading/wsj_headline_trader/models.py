@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+#: Longest text the matcher and scorer will read from one article. A real
+#: headline plus summary is a few hundred characters; anything beyond this is
+#: a broken or hostile feed, and regex work grows with length, so it is cut.
+MAX_TEXT_CHARS = 10_000
+
 
 class Side(str, Enum):
     """Direction of a trade."""
@@ -28,8 +33,14 @@ class Headline:
 
     @property
     def text(self) -> str:
-        """Title plus summary, the text the algorithm reads."""
-        return f"{self.title}. {self.summary}".strip()
+        """Title plus summary, the text the algorithm reads.
+
+        Truncated to :data:`MAX_TEXT_CHARS`. This is the single choke point
+        every consumer goes through, so a multi-megabyte title cannot turn one
+        article into seconds of regex scanning however it entered the system.
+        """
+        combined = f"{self.title}. {self.summary}".strip()
+        return combined[:MAX_TEXT_CHARS]
 
     @property
     def dedupe_key(self) -> str:

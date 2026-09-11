@@ -14,7 +14,7 @@ import json
 import logging
 import sys
 
-from .algorithm import AlgorithmConfig, WSJHeadlineAlgorithm, format_report
+from .algorithm import AlgorithmConfig, WSJHeadlineAlgorithm, append_signal_log, format_report
 from .broker import AlpacaBroker, BrokerError, PaperBroker
 from .feed import DEFAULT_FEEDS, fetch_feed, headlines_from_files
 from .strategy import StrategyConfig
@@ -95,6 +95,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     output = parser.add_argument_group("output")
     output.add_argument("--json", action="store_true", help="Emit the run report as JSON.")
+    output.add_argument(
+        "--log-signals",
+        metavar="PATH",
+        help=(
+            "Append this run's tradable signals to a JSONL file. Runs accumulate "
+            "into a signal history that wsj_headline_trader.pine_cli can turn into "
+            "a TradingView script."
+        ),
+    )
     output.add_argument("-v", "--verbose", action="store_true", help="Log what the algorithm is doing.")
 
     return parser
@@ -167,6 +176,15 @@ def main(argv: list[str] | None = None) -> int:
         config=config, broker=broker, universe=universe, fetcher=fetcher
     )
     report = algorithm.run(now=now)
+
+    if args.log_signals:
+        try:
+            appended = append_signal_log(args.log_signals, report)
+        except OSError as exc:
+            print(f"warning: could not write signal log: {exc}", file=sys.stderr)
+        else:
+            if appended and not args.json:
+                print(f"\n  Logged {appended} signal(s) to {args.log_signals}")
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))

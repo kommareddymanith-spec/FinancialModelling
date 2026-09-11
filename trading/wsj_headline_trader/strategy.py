@@ -56,20 +56,35 @@ class StrategyConfig:
             raise ValueError("min_agreement must be between 0 and 1")
 
 
-def extract_mentions(headlines: Iterable[Headline], universe: Universe) -> list[Mention]:
+def extract_mentions(
+    headlines: Iterable[Headline],
+    universe: Universe,
+    cache: dict[Headline, tuple[list[tuple[str, str]], float]] | None = None,
+) -> list[Mention]:
     """Find every (company, article) pair and attach the article's tone.
 
     Each article is scored once and that score is shared by all companies it
     names, which is the honest reading of a headline like "Ford Beats, GM
     Misses": the sentence-level attribution problem is not solved here, so a
     genuinely mixed article contributes a muted score to both names.
+
+    Pass a ``cache`` dict to memoise the company match and sentiment score per
+    article. A backtest with overlapping windows sees the same headline in many
+    consecutive decisions; without the memo it re-runs both regex passes every
+    time. Results are identical either way -- the cache holds only derived
+    values, keyed by the article itself.
     """
     mentions: list[Mention] = []
     for headline in headlines:
-        found = universe.find(headline.text)
+        if cache is not None and headline in cache:
+            found, polarity = cache[headline]
+        else:
+            found = universe.find(headline.text)
+            polarity = score_text(headline.text).polarity if found else 0.0
+            if cache is not None:
+                cache[headline] = (found, polarity)
         if not found:
             continue
-        sentiment = score_text(headline.text)
         for ticker, matched_as in found:
             mentions.append(
                 Mention(
@@ -77,7 +92,7 @@ def extract_mentions(headlines: Iterable[Headline], universe: Universe) -> list[
                     company=universe.name_for(ticker),
                     headline=headline,
                     matched_as=matched_as,
-                    sentiment=sentiment.polarity,
+                    sentiment=polarity,
                 )
             )
     log.info("extracted %d company mentions", len(mentions))

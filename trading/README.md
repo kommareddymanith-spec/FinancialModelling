@@ -281,13 +281,99 @@ money-weighted return (IRR) is what your contributions actually earned and is
 the right cross-plan comparison; time-weighted return strips contributions out
 and is what drawdown, volatility and Sharpe are computed from.
 
+## TradingView
+
+**The strategy cannot run on TradingView.** Pine Script executes inside
+TradingView's sandbox with no network access: it cannot fetch an RSS feed,
+parse XML, or read a headline. The company-recognition and sentiment half of
+this algorithm is not expressible in Pine, and no translation changes that.
+
+What does work is splitting the work at the capability boundary — Python has
+the network, TradingView has the chart:
+
+```
+Python                                TradingView
+------                                -----------
+read WSJ feeds                        plots the signals
+find companies, score tone     -->    runs the Strategy Tester
+emit a Pine script with the           fires alerts
+signals baked in as data
+```
+
+`wsj_headline_trader/pine.py` renders a self-contained Pine v5 `strategy()`
+with the signals embedded. One script covers every symbol it was generated
+with — it filters its own data by `syminfo.ticker`.
+
+### Getting signals onto a chart
+
+Since there is no headline archive, accumulate a signal history from scheduled
+live runs — this is the practical path:
+
+```bash
+# each scheduled run appends its signals
+python -m wsj_headline_trader --log-signals signals.jsonl
+
+# turn the accumulated history into a Pine script
+python -m wsj_headline_trader.pine_cli --signals signals.jsonl --out wsj.pine
+```
+
+Then paste `wsj.pine` into TradingView's Pine Editor and add it to a chart for
+any of the symbols it names. If you *do* have an archive, a replay exports
+directly:
+
+```bash
+python -m wsj_headline_trader.backtest_cli \
+    --archive headlines.jsonl --prices bars.csv --pine wsj.pine
+```
+
+### What you get, and what you don't
+
+| | |
+|---|---|
+| Signals plotted on the chart | ✅ |
+| TradingView Strategy Tester performance | ✅ |
+| Alerts on signal bars | ✅ (`alertcondition`) |
+| One script across many symbols | ✅ filters on `syminfo.ticker` |
+| Live headline reading inside Pine | ❌ impossible — no network in Pine |
+| Auto-refreshing signals | ❌ regenerate the script |
+
+The embedded signals are a **snapshot frozen at generation time**. Regenerate
+to refresh — there is no way for the script to pull new ones itself.
+
+Orders are placed on bar close, so TradingView fills them at the next bar's
+open, which matches the no-look-ahead rule the Python backtest uses.
+
+Two limits worth knowing: signals are capped at 5,000 (`--max-signals`, most
+recent kept) because Pine caps array size and script length; and the generated
+Pine is written to the v5 language reference but **cannot be compiled outside
+TradingView**, so its syntax is verified by pasting it in, not by this repo's
+tests. The tests check structure, symbol filtering, escaping, ordering and caps.
+
+## Stress testing
+
+The suite includes `tests/test_stress.py`, which fuzzes every public surface
+with hostile and degenerate input. Defects it found, all now fixed and kept as
+regression tests:
+
+| Finding | Fix |
+|---|---|
+| A feed declaring nested XML entities (billion laughs) expanded a 500-byte body into megabytes of title text | Feeds declaring entities are refused; protection no longer depends on the system libexpat version |
+| `fetch_feed` read the response body without limit | Capped at `MAX_FEED_BYTES` (8MB), detected rather than truncated |
+| A 2MB title cost ~2.1s of regex scanning per article | `Headline.text` capped at `MAX_TEXT_CHARS` (10k) — one choke point every consumer passes through; the same article now costs ~11ms |
+| The backtest rescanned the whole archive at every decision — `decisions x headlines`, billions of comparisons on a two-year run | Two-pointer sliding window plus an optional per-article memo; a 150k-headline, 2-year replay went from minutes to ~10s |
+| Well-formed XML that is not a feed (an HTML error page) returned nothing, silently | Still returns nothing, but logs a warning, so a dead feed URL cannot look like a quiet news hour |
+
+Things confirmed already safe: external entities are not resolved (no XXE),
+regex metacharacters in company aliases are treated as literals, equity curves
+survive going negative, and the IRR search terminates on extreme cashflows.
+
 ## Tests
 
 ```bash
 cd trading && PYTHONPATH=. python3 -m unittest discover -s tests -t .
 ```
 
-266 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
+327 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
 feeds written for the suite, not WSJ content.
 
 ## Layout
@@ -307,6 +393,8 @@ feeds written for the suite, not WSJ content.
 | `wsj_headline_trader/prices.py` | Price series and panel loading |
 | `wsj_headline_trader/archive.py` | Historical headline loading |
 | `wsj_headline_trader/backtest_cli.py` | Backtest command line interface |
+| `wsj_headline_trader/pine.py` | TradingView Pine Script generator |
+| `wsj_headline_trader/pine_cli.py` | Signal log to Pine command line interface |
 | `wsj_headline_trader/data/universe.json` | 207 companies, editable |
 | `data/sp500_monthly.csv` | S&P 500 monthly, 1990–2026 (see `data/SOURCES.md`) |
 

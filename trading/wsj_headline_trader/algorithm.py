@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -135,6 +136,38 @@ class WSJHeadlineAlgorithm:
                 "headlines": signal.headlines,
             },
         )
+
+
+def append_signal_log(path: str, report: RunReport) -> int:
+    """Append a run's tradable signals to a JSONL file, returning how many.
+
+    One line per signal, which is what :mod:`.pine` reads. Appending rather
+    than rewriting means a scheduled run builds up a signal history over time
+    -- the practical way to get a chartable series without a headline archive.
+    """
+    rows = [
+        {
+            "decided_at": report.ran_at.isoformat(),
+            "ticker": signal.ticker,
+            "company": signal.company,
+            "side": signal.side.value,
+            "mentions": signal.mention_count,
+            "sentiment_mean": round(signal.sentiment_mean, 4),
+            "agreement": round(signal.agreement(), 4),
+            "notional": round(signal.notional, 2),
+            "window_minutes": report.window_minutes,
+            "dry_run": report.dry_run,
+        }
+        for signal in report.signals
+        if signal.tradable
+    ]
+    if not rows:
+        return 0
+    with open(path, "a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+    log.info("appended %d signal(s) to %s", len(rows), path)
+    return len(rows)
 
 
 def format_report(report: RunReport) -> str:

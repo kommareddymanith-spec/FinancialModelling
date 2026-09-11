@@ -156,6 +156,9 @@ class BacktestResult:
     equity: list[tuple[_dt.date, float]] = field(default_factory=list)
     contributions: dict[_dt.date, float] = field(default_factory=dict)
     trades: list[Trade] = field(default_factory=list)
+    #: Every tradable signal with the decision time that produced it, kept so
+    #: a replay can be exported to a chart (see :mod:`.pine`).
+    signal_log: list[tuple[_dt.datetime, Signal]] = field(default_factory=list)
     open_at_end: list[Position] = field(default_factory=list)
     skipped: Counter = field(default_factory=Counter)
     decisions: int = 0
@@ -262,15 +265,28 @@ def run_backtest(
         headlines[0].published_at, headlines[-1].published_at + window, config.step_minutes
     )
     session_index = 0
+    # Two pointers over the (sorted) archive instead of rescanning it at every
+    # decision: `hi` admits articles as they are published, `lo` retires them
+    # as they age out of the window. Rescanning made the replay cost
+    # decisions x headlines, which on a two-year archive is billions of
+    # comparisons; this is linear in the archive plus the windows themselves.
+    lo = hi = 0
+    scored: dict[Headline, tuple[list[tuple[str, str]], float]] = {}
     for decision_time in times:
         result.decisions += 1
         cutoff = decision_time - window
-        visible = [h for h in headlines if cutoff <= h.published_at <= decision_time]
-        if not visible:
+        while hi < len(headlines) and headlines[hi].published_at <= decision_time:
+            hi += 1
+        while lo < hi and headlines[lo].published_at < cutoff:
+            lo += 1
+        if lo >= hi:
             continue
+        visible = headlines[lo:hi]
         signals = [
             s
-            for s in build_signals(extract_mentions(visible, universe), config.strategy)
+            for s in build_signals(
+                extract_mentions(visible, universe, cache=scored), config.strategy
+            )
             if s.tradable
         ]
         if not signals:
@@ -287,6 +303,7 @@ def run_backtest(
             result.skipped["after last session"] += len(signals)
             continue
         result.signals_generated += len(signals)
+        result.signal_log.extend((decision_time, signal) for signal in signals)
         queued.setdefault(sessions[session_index], []).extend(signals)
 
     # --- simulate -----------------------------------------------------

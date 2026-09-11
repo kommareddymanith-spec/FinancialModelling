@@ -20,6 +20,7 @@ from .archive import ArchiveError, load_archive
 from .backtest import BacktestConfig, run_backtest
 from .benchmark import DcaConfig, run_dca
 from .metrics import format_comparison
+from .pine import PineError, PineSignal, render, write as write_pine
 from .prices import PriceDataError, load_price_panel, load_series
 from .strategy import StrategyConfig
 from .universe import Universe
@@ -99,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     output = parser.add_argument_group("output")
     output.add_argument("--json", action="store_true", help="Emit results as JSON.")
     output.add_argument("--trades", action="store_true", help="List every closed trade.")
+    output.add_argument(
+        "--pine",
+        metavar="PATH",
+        help="Also write the replay's signals as a TradingView Pine script.",
+    )
     output.add_argument("-v", "--verbose", action="store_true")
 
     return parser
@@ -203,6 +209,35 @@ def main(argv: list[str] | None = None) -> int:
             print("error: the replay produced no equity curve; check the price panel.", file=sys.stderr)
             return 1
         summaries.insert(0, strategy_result.summary("WSJ headline strategy"))
+
+    # -- optional Pine export
+    if args.pine:
+        if strategy_result is None:
+            print(
+                "error: --pine needs a strategy replay; it has nothing to export "
+                "from a benchmark-only run.",
+                file=sys.stderr,
+            )
+            return 2
+        pine_signals = [
+            PineSignal(
+                symbol=signal.ticker,
+                at=decided_at,
+                side=signal.side,
+                mentions=signal.mention_count,
+                sentiment=signal.sentiment_mean,
+            )
+            for decided_at, signal in strategy_result.signal_log
+        ]
+        try:
+            write_pine(
+                args.pine,
+                render(pine_signals, hold_bars=args.hold_days),
+            )
+        except (PineError, OSError) as exc:
+            print(f"error: could not write Pine script: {exc}", file=sys.stderr)
+            return 2
+        print(f"Wrote {len(pine_signals)} signal(s) to {args.pine}\n")
 
     # -- report
     if args.json:

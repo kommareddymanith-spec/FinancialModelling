@@ -31,6 +31,11 @@ DEFAULT_FEEDS: tuple[str, ...] = (
 
 USER_AGENT = "wsj-headline-trader/1.0 (+https://github.com/kommareddymanith-spec/financialmodelling)"
 
+#: Largest feed body accepted. The real feeds are well under 200KB; reading
+#: an unbounded response would let a broken or hostile endpoint exhaust
+#: memory before a single headline was parsed.
+MAX_FEED_BYTES = 8 * 1024 * 1024
+
 #: Callable that turns a feed URL into raw bytes. Swapped out in tests and by
 #: ``--fixture`` on the CLI so the algorithm can run with no network at all.
 Fetcher = Callable[[str], bytes]
@@ -45,9 +50,14 @@ def fetch_feed(url: str, timeout: float = 15.0) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+            # Read one byte past the cap so an oversized body is detected
+            # rather than silently truncated into malformed XML.
+            payload = response.read(MAX_FEED_BYTES + 1)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
         raise FeedError(f"could not fetch {url}: {exc}") from exc
+    if len(payload) > MAX_FEED_BYTES:
+        raise FeedError(f"{url} returned more than {MAX_FEED_BYTES} bytes; refusing it")
+    return payload
 
 
 def _local_name(tag: str) -> str:
@@ -95,15 +105,33 @@ def parse_feed(payload: bytes, source: str = "") -> list[Headline]:
     Entries without a parsable timestamp are dropped: the algorithm only ever
     trades a bounded time window, so an article we cannot date is unusable.
     """
+    if len(payload) > MAX_FEED_BYTES:
+        raise FeedError(
+            f"feed from {source or 'feed'} is {len(payload)} bytes, over the "
+            f"{MAX_FEED_BYTES} byte limit"
+        )
+
+    # RSS and Atom have no need of a DTD, and a DTD that declares entities is
+    # the billion-laughs vector: a few hundred bytes expanding into megabytes
+    # of title text. Whether the underlying expat stops it depends on the
+    # system library version, so refuse it here rather than hope.
+    head = payload[:4096].lower()
+    if b"<!doctype" in head and b"<!entity" in payload[:65536].lower():
+        raise FeedError(
+            f"feed from {source or 'feed'} declares XML entities; refusing it"
+        )
+
     try:
         root = ET.fromstring(payload)
     except ET.ParseError as exc:
         raise FeedError(f"malformed feed XML from {source or 'feed'}: {exc}") from exc
 
     headlines: list[Headline] = []
+    entries_seen = 0
     for element in root.iter():
         if _local_name(element.tag) not in ("item", "entry"):
             continue
+        entries_seen += 1
         title = _child_text(element, "title")
         if not title:
             continue
@@ -121,6 +149,17 @@ def parse_feed(payload: bytes, source: str = "") -> list[Headline]:
                 published_at=published,
                 source=source,
             )
+        )
+
+    if entries_seen == 0:
+        # Well-formed XML with no items at all is usually not a feed: an HTML
+        # error page, a redirect notice, or a moved endpoint. Returning an
+        # empty list is the safe outcome, but staying silent would let a dead
+        # feed URL look like a quiet news hour indefinitely.
+        log.warning(
+            "%s parsed as XML but contained no RSS items or Atom entries; "
+            "is the URL still a feed?",
+            source or "feed",
         )
     return headlines
 

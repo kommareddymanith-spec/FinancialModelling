@@ -19,6 +19,7 @@ from .backtest import BacktestConfig, BacktestResult, Trade, run_backtest
 from .benchmark import DcaConfig, DcaResult, run_dca
 from .broker import AlpacaBroker, PaperBroker, StaticPriceProvider
 from .metrics import PerformanceSummary, format_comparison, irr, summarise
+from .pine import PineSignal, render as render_pine
 from .models import Headline, Mention, Order, OrderResult, RunReport, Side, Signal
 from .prices import PricePanel, load_price_panel, load_series
 from .sentiment import score_text
@@ -41,6 +42,7 @@ __all__ = [
     "OrderResult",
     "PaperBroker",
     "PerformanceSummary",
+    "PineSignal",
     "PricePanel",
     "RunReport",
     "Side",
@@ -58,6 +60,7 @@ __all__ = [
     "load_archive",
     "load_price_panel",
     "load_series",
+    "render_pine",
     "run_backtest",
     "run_dca",
     "score_text",
