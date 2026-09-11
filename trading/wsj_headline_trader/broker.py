@@ -32,6 +32,25 @@ ALPACA_LIVE_URL = "https://api.alpaca.markets"
 ALPACA_DATA_URL = "https://data.alpaca.markets"
 
 
+@dataclass(frozen=True)
+class BrokerPosition:
+    """An open position as the venue reports it."""
+
+    symbol: str
+    qty: float
+    side: Side
+    avg_entry_price: float
+    current_price: float
+    unrealized_pl: float
+    #: Unrealized P&L as a fraction of cost basis. Signed for the position's
+    #: direction, so a profitable short is positive.
+    unrealized_plpc: float
+
+    @property
+    def market_value(self) -> float:
+        return self.qty * self.current_price
+
+
 class BrokerError(RuntimeError):
     """Raised for configuration problems, not for rejected orders."""
 
@@ -114,10 +133,61 @@ class PaperBroker:
     orders: list[Order] = field(default_factory=list)
     #: symbol -> signed share count (negative is short).
     positions: dict[str, float] = field(default_factory=dict)
+    #: symbol -> volume-weighted entry price, for unrealized P&L.
+    entry_prices: dict[str, float] = field(default_factory=dict)
 
     def open_symbols(self) -> set[str]:
         """Symbols currently held, long or short."""
         return {symbol for symbol, qty in self.positions.items() if qty}
+
+    def open_positions(self) -> list[BrokerPosition]:
+        """The paper book, marked at the current price provider."""
+        out: list[BrokerPosition] = []
+        for symbol, signed_qty in self.positions.items():
+            if not signed_qty:
+                continue
+            price = self.prices.last_price(symbol)
+            entry = self.entry_prices.get(symbol, price)
+            if not price or not entry:
+                continue
+            side = Side.BUY if signed_qty > 0 else Side.SHORT
+            qty = abs(signed_qty)
+            direction = 1.0 if side is Side.BUY else -1.0
+            unrealized = direction * qty * (price - entry)
+            basis = qty * entry
+            out.append(
+                BrokerPosition(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side,
+                    avg_entry_price=entry,
+                    current_price=price,
+                    unrealized_pl=unrealized,
+                    unrealized_plpc=unrealized / basis if basis else 0.0,
+                )
+            )
+        return out
+
+    def close_position(self, symbol: str) -> OrderResult:
+        """Flatten a symbol, returning the closing order's result."""
+        signed_qty = self.positions.get(symbol, 0.0)
+        if not signed_qty:
+            return OrderResult(
+                order=Order(symbol=symbol, side=Side.FLAT),
+                accepted=False,
+                message=f"no open position in {symbol}",
+            )
+        closing = Order(
+            symbol=symbol,
+            side=Side.SHORT if signed_qty > 0 else Side.BUY,
+            qty=abs(signed_qty),
+            metadata={"intent": "close"},
+        )
+        result = self.submit(closing)
+        if result.accepted:
+            self.positions.pop(symbol, None)
+            self.entry_prices.pop(symbol, None)
+        return result
 
     def submit(self, order: Order) -> OrderResult:
         price = self.prices.last_price(order.symbol)
@@ -135,7 +205,18 @@ class PaperBroker:
             return OrderResult(order=order, accepted=False, message="non-positive quantity")
 
         signed = qty if order.side is Side.BUY else -qty
-        self.positions[order.symbol] = self.positions.get(order.symbol, 0.0) + signed
+        previous = self.positions.get(order.symbol, 0.0)
+        updated = previous + signed
+        if order.metadata.get("intent") != "close" and price:
+            # Volume-weighted entry, so a top-up moves the basis rather than
+            # replacing it. Closing orders leave the basis alone.
+            previous_basis = abs(previous) * self.entry_prices.get(order.symbol, price)
+            self.entry_prices[order.symbol] = (
+                (previous_basis + qty * price) / (abs(previous) + qty)
+                if (abs(previous) + qty)
+                else price
+            )
+        self.positions[order.symbol] = updated
         self.orders.append(order)
 
         log.info(
@@ -260,6 +341,79 @@ class AlpacaBroker:
             for position in body
             if position.get("symbol")
         }
+
+    def open_positions(self) -> list[BrokerPosition]:
+        """Open positions with entry price and unrealized P&L."""
+        try:
+            body = self._request(f"{self.base_url}/v2/positions")
+        except BrokerError as exc:
+            log.warning("could not read open positions: %s", exc)
+            return []
+        if not isinstance(body, list):  # pragma: no cover - defensive
+            return []
+
+        out: list[BrokerPosition] = []
+        for row in body:
+            try:
+                qty = abs(float(row.get("qty") or 0.0))
+                entry = float(row.get("avg_entry_price") or 0.0)
+                price = float(row.get("current_price") or 0.0)
+                plpc = float(row.get("unrealized_plpc") or 0.0)
+                pl = float(row.get("unrealized_pl") or 0.0)
+            except (TypeError, ValueError):
+                log.warning("skipping unparsable position row: %r", row)
+                continue
+            if not row.get("symbol") or qty <= 0:
+                continue
+            out.append(
+                BrokerPosition(
+                    symbol=str(row["symbol"]).upper(),
+                    qty=qty,
+                    side=Side.SHORT if str(row.get("side", "")).lower() == "short" else Side.BUY,
+                    avg_entry_price=entry,
+                    current_price=price,
+                    unrealized_pl=pl,
+                    unrealized_plpc=plpc,
+                )
+            )
+        return out
+
+    def close_position(self, symbol: str) -> OrderResult:
+        """Close a position with ``DELETE /v2/positions/{symbol}``.
+
+        Alpaca flattens whatever is actually held, which avoids the race of
+        reading a quantity and then submitting it as a separate order.
+        """
+        url = f"{self.base_url}/v2/positions/{symbol}"
+        request = urllib.request.Request(url, headers=self._headers, method="DELETE")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            return OrderResult(
+                order=Order(symbol=symbol, side=Side.FLAT),
+                accepted=False,
+                message=f"{exc.code} closing {symbol}: {detail}",
+            )
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return OrderResult(
+                order=Order(symbol=symbol, side=Side.FLAT),
+                accepted=False,
+                message=f"could not reach {url}: {exc}",
+            )
+
+        return OrderResult(
+            order=Order(
+                symbol=symbol,
+                side=Side.FLAT,
+                qty=float(body.get("qty") or 0.0) or None,
+                metadata={"intent": "close"},
+            ),
+            accepted=True,
+            broker_order_id=body.get("id"),
+            message=str(body.get("status", "close submitted")),
+        )
 
     # -- orders ----------------------------------------------------------
 

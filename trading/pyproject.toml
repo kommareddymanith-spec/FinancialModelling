@@ -16,6 +16,8 @@ wsj-headline-trader = "wsj_headline_trader.cli:main"
 wsj-headline-backtest = "wsj_headline_trader.backtest_cli:main"
 wsj-headline-pine = "wsj_headline_trader.pine_cli:main"
 wsj-headline-simulate = "wsj_headline_trader.simulate_cli:main"
+wsj-headline-exit = "wsj_headline_trader.exit_cli:main"
+wsj-headline-tune = "wsj_headline_trader.tuning_cli:main"
 
 [tool.setuptools]
 packages = ["wsj_headline_trader"]

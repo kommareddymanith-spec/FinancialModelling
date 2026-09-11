@@ -281,6 +281,127 @@ money-weighted return (IRR) is what your contributions actually earned and is
 the right cross-plan comparison; time-weighted return strips contributions out
 and is what drawdown, volatility and Sharpe are computed from.
 
+## Exits
+
+The entry algorithm only opens positions. The exit job closes them, on three
+rules applied in order of urgency:
+
+1. **Stop loss** — unrealized loss at or beyond a threshold.
+2. **Take profit** — unrealized gain at or beyond a threshold.
+3. **Time stop** — held longer than a maximum, whatever the P&L.
+
+```bash
+# see what would be closed
+python -m wsj_headline_trader.exit_cli --broker alpaca
+
+# actually close
+python -m wsj_headline_trader.exit_cli --broker alpaca --live \
+    --stop-loss 0.02 --take-profit 0.12 --max-hold-days 5 \
+    --ledger ~/wsj-entries.json
+```
+
+```
+Exit job -- 2026-09-10 15:30 UTC
+  mode            : LIVE
+  open positions  : 2
+
+  SYMBOL  SIDE        ENTRY     PRICE      P&L   HELD  ACTION
+  NVDA    buy        100.00    110.00  +10.00%   2.1d  hold
+  BA      short      100.00    106.00   -6.00%   1.4d  stop loss
+
+  1/1 close order(s) accepted.
+```
+
+Run it on a **tighter schedule than the entry job** — a stop checked once an
+hour is a stop that can be gapped through. It is idempotent, so running it more
+often costs only an API call:
+
+```cron
+*/5 14-21 * * 1-5  . $HOME/.wsj-trader.env && cd /path/to/trading && \
+                   /usr/bin/python3 -m wsj_headline_trader.exit_cli --live \
+                   --broker alpaca --ledger $HOME/wsj-entries.json
+```
+
+The loss rule is checked before the profit rule: when a position gaps through
+both thresholds between runs, taking the loss is the conservative reading of an
+unknown intrabar path. Short P&L is already signed for direction, so a
+profitable short reads positive.
+
+The time stop needs to know when a position was opened, which no venue's
+position endpoint reports. Add `--ledger PATH` to the *entry* job and it
+records entry times; the exit job ages positions against it and prunes closed
+ones. Without a ledger the time stop is skipped and the P&L rules still work,
+since those need only the unrealized return the venue already gives.
+
+## Choosing the thresholds
+
+`tuning_cli` sweeps a grid of (stop, target) pairs across many simulated years,
+then re-scores the leaders on seeds they never saw:
+
+```bash
+python -m wsj_headline_trader.tuning_cli --train-seeds 80 --validation-seeds 80
+```
+
+The full run is recorded in `data/exit_sweep_2026-09-11.txt` — **3,840
+simulated years**, 42 grid points, costs charged throughout. What it found:
+
+| stop / target | train median | held-out median | held-out drawdown | worst year |
+|---|---|---|---|---|
+| 2% / 12% | +35.1% | **+31.0%** | −13% | −6.2% |
+| 2% / 8% | +35.4% | +30.2% | −12% | −8.0% |
+| 2% / 6% | +33.7% | +26.6% | −12% | −9.4% |
+| 3% / 4% | +25.9% | +24.8% | −13% | −19.1% |
+| 2% / 4% | +27.1% | +23.0% | −11% | −6.1% |
+| **none / none** | +24.9% | +24.9% | **−19%** | **−45.2%** |
+
+Three things to read off it, in descending order of how much they should be
+trusted:
+
+**The tail-risk improvement is real and large.** Every stop cell in the grid
+has a shallower drawdown than every no-stop cell — −11% to −13% against −18%
+to −19% — and the worst single year goes from −45% to under −10%. This is not a
+selection artifact, because it holds across the whole grid rather than at one
+lucky point.
+
+**The return improvement is not established.** The best held-out cell beats
+no-stop by about 6 points with a standard error around 2.5 — call it two
+standard errors, on a cell that was picked partly for looking good. Set a stop
+to bound the tail, not to raise the mean.
+
+**Tight targets cost money.** Every 4% target lands at the bottom of the grid
+(+17% to +27% median). Clipping a winner at 4% while still carrying stop risk
+is the worst of both. Targets of 12% or none perform about the same, which
+means the target barely fires at all — its real job is capping the occasional
+runaway, not routine profit-taking.
+
+The sweep also measures **how often a stop is wrong**: for every stop-loss exit
+it computes what the trade would have made held to the time stop. That rate sat
+at 45–49% almost regardless of stop width — the stop cuts a would-be recovery
+slightly less than half the time, and widening it does not help. A cell whose
+rate exceeds 50% is rejected outright, since the brief was to avoid exiting
+early.
+
+### What carries over to real markets, and what does not
+
+The shipped defaults are **2% stop / 12% target / 5-day time stop**, and they
+are fitted to the simulator. Be clear about which parts survive contact with
+reality:
+
+- **The shape carries over.** Tight stop plus distant target beat wide stop
+  plus tight target across the entire grid. That is a property of the
+  strategy's own mechanics — short holds, modest edge, real costs — not of the
+  random numbers.
+- **The level does not.** A 2% stop is about one daily standard deviation in a
+  35%-volatility simulated market. On a quieter symbol it is a wide stop; on a
+  noisier one it is inside the spread. The durable form of this rule is
+  **volatility-scaled** — a multiple of ATR — not a fixed percentage. That is
+  the next thing to build.
+- **The selection rule matters more than the grid.** Ranking by return picked
+  4%/12%, whose train median of +35.5% fell to +26.5% held out, beating no-stop
+  by 0.3 standard errors — nothing. Ranking by drawdown among cells that give
+  up no return (`--objective tail-risk`, the default) picks on the thing that
+  actually generalises.
+
 ## Running on an Alpaca account
 
 ### 1. Get keys
@@ -380,20 +501,15 @@ Both guards only engage on a live submit. Dry runs never call the broker.
 | Skips symbols already held | ✅ |
 | Refuses to trade a closed market | ✅ |
 | Sizes by conviction, capped per run | ✅ |
-| **Closes positions** | ❌ **nothing here exits a trade** |
-| Stop losses on the live path | ❌ backtest only |
+| Closes positions | ✅ via the exit job, scheduled separately |
 | Reconciles against manual trades | ❌ |
 
-**The exit gap is the one that matters.** The backtest models a time stop and
-optional stop/target, but the live algorithm only opens positions — it will
-never close one. Before running this beyond a short paper experiment you need
-an exit, either as a bracket on the entry or a second scheduled job that closes
-anything held longer than N sessions. Until then, Alpaca's dashboard is your
-only exit.
+The entry job opens; the **exit job** closes. Run both — see [Exits](#exits).
+The entry job alone will never close a position.
 
-A practical first experiment: preflight, then run on paper for two weeks with
-`--log-signals`, and close positions by hand. That tells you whether the
-signals are sane before you automate anything irreversible.
+A practical first experiment: preflight, then run entry hourly and exit every
+five minutes on paper for two weeks with `--log-signals`. That tells you
+whether the signals are sane before you automate anything irreversible.
 
 ## Testing it in a dummy market
 
@@ -594,7 +710,7 @@ survive going negative, and the IRR search terminates on extreme cashflows.
 cd trading && PYTHONPATH=. python3 -m unittest discover -s tests -t .
 ```
 
-379 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
+451 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
 feeds written for the suite, not WSJ content.
 
 ## Layout
@@ -618,6 +734,11 @@ feeds written for the suite, not WSJ content.
 | `wsj_headline_trader/pine_cli.py` | Signal log to Pine command line interface |
 | `wsj_headline_trader/simulate.py` | Synthetic market and the null/power experiments |
 | `wsj_headline_trader/simulate_cli.py` | Simulation command line interface |
+| `wsj_headline_trader/exit_job.py` | Stop, target and time-stop exits |
+| `wsj_headline_trader/exit_cli.py` | Exit job command line interface |
+| `wsj_headline_trader/tuning.py` | Threshold sweep with a held-out check |
+| `wsj_headline_trader/tuning_cli.py` | Sweep command line interface |
+| `data/exit_sweep_2026-09-11.txt` | The recorded sweep behind the defaults |
 | `wsj_headline_trader/data/universe.json` | 207 companies, editable |
 | `data/sp500_monthly.csv` | S&P 500 monthly, 1990–2026 (see `data/SOURCES.md`) |
 

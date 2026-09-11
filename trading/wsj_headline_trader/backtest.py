@@ -137,6 +137,14 @@ class Trade:
     exit_reason: str
     mentions: int
     sentiment: float
+    #: Net P&L this trade would have made had it been held to the time stop
+    #: instead of being cut by a stop or target. ``None`` when the trade
+    #: already ran to the time stop, or when the panel ends first.
+    #:
+    #: This is computed after the fact, purely for measuring whether the exits
+    #: are firing too early. It is deliberately never visible to any trading
+    #: decision -- doing so would be look-ahead.
+    hold_to_time_stop_pnl: float | None = None
 
     @property
     def net_pnl(self) -> float:
@@ -147,6 +155,18 @@ class Trade:
     def return_pct(self) -> float:
         base = self.qty * self.entry_reference
         return self.net_pnl / base if base else 0.0
+
+    @property
+    def cut_early(self) -> bool | None:
+        """Would holding to the time stop have been better than this exit?
+
+        ``None`` when there is nothing to compare against. A high rate of
+        ``True`` among stop-loss exits means the stop is inside the noise and
+        is cutting trades that would have recovered.
+        """
+        if self.hold_to_time_stop_pnl is None:
+            return None
+        return self.hold_to_time_stop_pnl > self.net_pnl
 
 
 @dataclass
@@ -227,6 +247,45 @@ def _fill_session(
         if bell > decision_time:
             return session
     return None
+
+
+def _hold_to_time_stop_pnl(
+    position: Position,
+    panel: PricePanel,
+    config: BacktestConfig,
+    slip: float,
+    daily_borrow: float,
+) -> float | None:
+    """Net P&L the position would have shown at its time stop.
+
+    Used only to report whether stops and targets cut trades that would have
+    recovered. Never consulted while deciding anything.
+    """
+    future = panel.bars_between(
+        position.symbol, position.entry_date, _dt.date.max
+    )
+    if len(future) < config.hold_days:
+        return None
+    final = future[config.hold_days - 1]
+
+    if position.side is Side.BUY:
+        gross = position.qty * (final.close - position.entry_reference)
+    else:
+        gross = position.qty * (position.entry_reference - final.close)
+
+    borrow = 0.0
+    if position.side is Side.SHORT:
+        borrow = sum(
+            position.qty * bar.close * daily_borrow
+            for bar in future[: config.hold_days - 1]
+        )
+    costs = (
+        position.qty * position.entry_reference * slip
+        + position.qty * final.close * slip
+        + 2 * config.commission_per_trade
+        + borrow
+    )
+    return gross - costs
 
 
 def _contribution_due(date: _dt.date, last: _dt.date | None, day: int) -> bool:
@@ -387,6 +446,12 @@ def run_backtest(
                 + 2 * config.commission_per_trade
                 + position.borrow_paid
             )
+
+            hypothetical = None
+            if reason != "time stop":
+                hypothetical = _hold_to_time_stop_pnl(
+                    position, panel, config, slip, daily_borrow
+                )
             result.total_costs += (
                 position.qty * exit_price * slip + config.commission_per_trade
             )
@@ -405,6 +470,7 @@ def run_backtest(
                     exit_reason=reason,
                     mentions=position.mentions,
                     sentiment=position.sentiment,
+                    hold_to_time_stop_pnl=hypothetical,
                 )
             )
         open_positions = still_open

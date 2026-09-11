@@ -16,6 +16,7 @@ import sys
 
 from .algorithm import AlgorithmConfig, WSJHeadlineAlgorithm, append_signal_log, format_report
 from .broker import AlpacaBroker, AlpacaPriceProvider, BrokerError, PaperBroker
+from .exit_job import record_entry
 from .feed import DEFAULT_FEEDS, collect_headlines, fetch_feed, headlines_from_files
 from .strategy import StrategyConfig
 from .universe import Universe
@@ -130,6 +131,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     output = parser.add_argument_group("output")
     output.add_argument("--json", action="store_true", help="Emit the run report as JSON.")
+    output.add_argument(
+        "--ledger",
+        metavar="PATH",
+        help=(
+            "Record entry times here so the exit job can apply a time stop. "
+            "Only written on an accepted live order."
+        ),
+    )
     output.add_argument(
         "--log-signals",
         metavar="PATH",
@@ -315,6 +324,15 @@ def main(argv: list[str] | None = None) -> int:
         config=config, broker=broker, universe=universe, fetcher=fetcher
     )
     report = algorithm.run(now=now)
+
+    if args.ledger and not config.dry_run:
+        for result in report.results:
+            if result.accepted:
+                try:
+                    record_entry(args.ledger, result.order.symbol, report.ran_at)
+                except OSError as exc:
+                    print(f"warning: could not write the ledger: {exc}", file=sys.stderr)
+                    break
 
     if args.log_signals:
         try:
