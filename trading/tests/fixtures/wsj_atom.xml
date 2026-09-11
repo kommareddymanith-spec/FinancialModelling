@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>WSJ Tech (Atom)</title>
+  <entry>
+    <title>Tesla Recalls 200,000 Vehicles Over Software Fault</title>
+    <summary>Tesla shares dropped after the recall was disclosed.</summary>
+    <link href="https://www.wsj.com/atom/0"/>
+    <published>2026-09-10T15:23:00Z</published>
+  </entry>
+  <entry>
+    <title>Tesla Delays Its Semi Truck Again</title>
+    <summary>The delay disappointed investors.</summary>
+    <link href="https://www.wsj.com/atom/1"/>
+    <published>2026-09-10T15:15:00Z</published>
+  </entry>
+  <entry>
+    <title>Tesla Opened a Plant in 2024</title>
+    <summary>Too old for the window.</summary>
+    <link href="https://www.wsj.com/atom/2"/>
+    <published>2026-09-10T13:00:00Z</published>
+  </entry>
+</feed>
