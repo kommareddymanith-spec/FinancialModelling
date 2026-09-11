@@ -5,6 +5,7 @@ the last hour: buys the ones written about positively, shorts the ones written
 about negatively.
 
 Pure standard library — no third-party packages needed to run it.
+Tested on CPython 3.10, 3.11, 3.12 and 3.13.
 
 ## How it works
 
