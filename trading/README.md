@@ -281,6 +281,120 @@ money-weighted return (IRR) is what your contributions actually earned and is
 the right cross-plan comparison; time-weighted return strips contributions out
 and is what drawdown, volatility and Sharpe are computed from.
 
+## Running on an Alpaca account
+
+### 1. Get keys
+
+Sign up at [alpaca.markets](https://alpaca.markets), and in the dashboard
+switch to **Paper Trading** before generating keys — paper and live keys are
+different, and a paper key cannot touch real money whatever flags you pass.
+Generate a key pair and export both:
+
+```bash
+export APCA_API_KEY_ID=PK...
+export APCA_API_SECRET_KEY=...
+```
+
+Put them in a file the scheduler can read (`~/.wsj-trader.env`, mode `600`)
+rather than in your shell history. They are never written to the signal log or
+any artifact this repo produces.
+
+### 2. Preflight
+
+Run this before trusting anything to a schedule, and again after any
+credential change:
+
+```bash
+python -m wsj_headline_trader --check --broker alpaca
+```
+
+```
+Preflight
+
+  broker            : alpaca
+  endpoint          : https://paper-api.alpaca.markets
+  account status    : ACTIVE
+  buying power      : 200000
+  shorting enabled  : True
+  market            : OPEN (next open 2026-09-11T13:30:00Z)
+  open positions    : none
+  feeds reachable   : 4/4
+  headlines in  60m : 12
+
+  Ready. Nothing was traded by this check.
+```
+
+It exits non-zero and says what is wrong if credentials are rejected, the
+account is blocked, **shorting is disabled**, or no feed can be read. That last
+one matters: credentials are useless without headlines, and an outbound
+firewall blocking `feeds.content.dowjones.io` is a silent failure otherwise.
+
+**Shorting needs a margin account.** On a cash account every short signal is
+refused and you get the long half of a long/short strategy — which is a
+different strategy. Preflight fails loudly rather than letting you discover
+this from a week of one-sided fills.
+
+### 3. Dry run, then paper
+
+```bash
+# nothing is sent; prints what it would do
+python -m wsj_headline_trader --broker alpaca -v
+
+# sends to the paper endpoint
+python -m wsj_headline_trader --live --broker alpaca -v --log-signals signals.jsonl
+```
+
+`--live` is required before any order is sent, and Alpaca stays on its paper
+endpoint unless you also pass `--real-money`.
+
+### 4. Schedule it
+
+```cron
+# hourly, half past, US market hours, weekdays
+30 14-20 * * 1-5  . $HOME/.wsj-trader.env && cd /path/to/trading && \
+                  /usr/bin/python3 -m wsj_headline_trader --live --broker alpaca \
+                  --log-signals $HOME/wsj-signals.jsonl >> $HOME/wsj.log 2>&1
+```
+
+Two defaults exist because a schedule breaks things a single run does not:
+
+- **It will not trade a closed market.** A market order sent when the venue is
+  shut is at best queued to an open hours away, acting on headlines that
+  stopped being news overnight. The run checks Alpaca's clock and declines,
+  recording `market closed` in the report. `--queue-when-closed` overrides it.
+  An *unknown* clock (the call failed) also declines — unknown is not
+  permission.
+- **It will not stack positions.** Runs are stateless, so without this an
+  hourly schedule pyramids into any story that stays in the news: three days of
+  Nvidia headlines becomes a position many times the intended size. The run
+  reads open positions and skips symbols already held, reporting
+  `already holding`. `--allow-stacking` overrides it.
+
+Both guards only engage on a live submit. Dry runs never call the broker.
+
+### 5. What it does and does not manage
+
+| | |
+|---|---|
+| Opens positions from signals | ✅ |
+| Skips symbols already held | ✅ |
+| Refuses to trade a closed market | ✅ |
+| Sizes by conviction, capped per run | ✅ |
+| **Closes positions** | ❌ **nothing here exits a trade** |
+| Stop losses on the live path | ❌ backtest only |
+| Reconciles against manual trades | ❌ |
+
+**The exit gap is the one that matters.** The backtest models a time stop and
+optional stop/target, but the live algorithm only opens positions — it will
+never close one. Before running this beyond a short paper experiment you need
+an exit, either as a bracket on the entry or a second scheduled job that closes
+anything held longer than N sessions. Until then, Alpaca's dashboard is your
+only exit.
+
+A practical first experiment: preflight, then run on paper for two weeks with
+`--log-signals`, and close positions by hand. That tells you whether the
+signals are sane before you automate anything irreversible.
+
 ## Testing it in a dummy market
 
 Three ways to exercise the algorithm without risking money, in increasing
@@ -480,7 +594,7 @@ survive going negative, and the IRR search terminates on extreme cashflows.
 cd trading && PYTHONPATH=. python3 -m unittest discover -s tests -t .
 ```
 
-351 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
+379 tests, no network required — the fixtures in `tests/fixtures/` are synthetic
 feeds written for the suite, not WSJ content.
 
 ## Layout

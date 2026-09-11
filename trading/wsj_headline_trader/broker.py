@@ -95,7 +95,13 @@ class AlpacaPriceProvider:
 
 
 class Broker(Protocol):
-    """The only thing the algorithm needs from an execution venue."""
+    """The only thing the algorithm needs from an execution venue.
+
+    ``open_symbols`` and ``is_market_open`` are optional: the algorithm probes
+    for them with :func:`getattr` so a custom broker only has to implement
+    ``submit``. A broker that cannot answer them simply does not get the
+    corresponding safety check.
+    """
 
     def submit(self, order: Order) -> OrderResult: ...
 
@@ -108,6 +114,10 @@ class PaperBroker:
     orders: list[Order] = field(default_factory=list)
     #: symbol -> signed share count (negative is short).
     positions: dict[str, float] = field(default_factory=dict)
+
+    def open_symbols(self) -> set[str]:
+        """Symbols currently held, long or short."""
+        return {symbol for symbol, qty in self.positions.items() if qty}
 
     def submit(self, order: Order) -> OrderResult:
         price = self.prices.last_price(order.symbol)
@@ -184,7 +194,9 @@ class AlpacaBroker:
             "Content-Type": "application/json",
         }
 
-    def _request(self, url: str, payload: dict | None = None) -> dict:
+    def _request(self, url: str, payload: dict | None = None):
+        """GET or POST JSON. Returns whatever the endpoint sends -- ``/v2/orders``
+        answers with an object, ``/v2/positions`` with an array."""
         data = json.dumps(payload).encode() if payload is not None else None
         request = urllib.request.Request(
             url, data=data, headers=self._headers, method="POST" if data else "GET"
@@ -210,6 +222,44 @@ class AlpacaBroker:
             return None
         price = body.get("trade", {}).get("p")
         return float(price) if price else None
+
+    # -- account state ---------------------------------------------------
+
+    def account(self) -> dict:
+        """Raw ``/v2/account``. Raises :class:`BrokerError` if unreachable."""
+        return self._request(f"{self.base_url}/v2/account")
+
+    def clock(self) -> dict:
+        """Raw ``/v2/clock``: whether the market is open, and when it next is."""
+        return self._request(f"{self.base_url}/v2/clock")
+
+    def is_market_open(self) -> bool | None:
+        """True/False if the venue answered, ``None`` if it could not be asked.
+
+        ``None`` is deliberately distinct from ``False``: a failed clock call
+        means unknown, and the caller should not treat that as "closed" and
+        silently skip a session, nor as "open" and fire into a closed market.
+        """
+        try:
+            return bool(self.clock().get("is_open"))
+        except BrokerError as exc:
+            log.warning("could not read the market clock: %s", exc)
+            return None
+
+    def open_symbols(self) -> set[str]:
+        """Symbols the account currently holds, long or short."""
+        try:
+            body = self._request(f"{self.base_url}/v2/positions")
+        except BrokerError as exc:
+            log.warning("could not read open positions: %s", exc)
+            return set()
+        if not isinstance(body, list):  # pragma: no cover - defensive
+            return set()
+        return {
+            str(position.get("symbol", "")).upper()
+            for position in body
+            if position.get("symbol")
+        }
 
     # -- orders ----------------------------------------------------------
 

@@ -29,6 +29,15 @@ class AlgorithmConfig:
     universe_path: str | None = None
     #: When true, signals are produced and logged but no order is submitted.
     dry_run: bool = True
+    #: Skip a signal in a symbol the account already holds. Runs are stateless,
+    #: so without this an hourly schedule pyramids into any story that stays in
+    #: the news -- three days of Nvidia headlines becomes a position many times
+    #: the intended size.
+    skip_held_symbols: bool = True
+    #: Refuse to submit while the venue reports the market closed. A market
+    #: order sent into a closed market is at best queued to an open hours away,
+    #: acting on headlines that are no longer news.
+    require_market_open: bool = False
 
     def __post_init__(self) -> None:
         if self.window_minutes < 1:
@@ -90,7 +99,32 @@ class WSJHeadlineAlgorithm:
         mentions = extract_mentions(headlines, self.universe)
         report.signals = build_signals(mentions, config.strategy)
 
+        if not config.dry_run and config.require_market_open:
+            open_now = self._market_open()
+            if open_now is False:
+                log.warning("the market is closed; not submitting")
+                for signal in report.signals:
+                    if signal.tradable:
+                        signal.skip_reason = "market closed"
+                report.notes.append("market closed, nothing submitted")
+                return report
+            if open_now is None:
+                log.warning("could not confirm the market is open; not submitting")
+                for signal in report.signals:
+                    if signal.tradable:
+                        signal.skip_reason = "market state unknown"
+                report.notes.append("market state unknown, nothing submitted")
+                return report
+
+        held: set[str] = set()
+        if not config.dry_run and config.skip_held_symbols:
+            held = self._held_symbols()
+            if held:
+                log.info("already holding %s", ", ".join(sorted(held)))
+
         for signal in report.signals:
+            if signal.tradable and signal.ticker in held:
+                signal.skip_reason = "already holding"
             if not signal.tradable:
                 log.info(
                     "skip %s (%d mention(s), tone %+.2f): %s",
@@ -119,6 +153,39 @@ class WSJHeadlineAlgorithm:
             report.results.append(self.broker.submit(order))
 
         return report
+
+    def _market_open(self) -> bool | None:
+        """Ask the broker whether the market is open, if it can answer.
+
+        ``None`` means unanswerable -- either the broker has no clock or the
+        call failed. That is treated as a reason not to trade rather than as
+        permission, since firing into an unknown market state is the worse
+        error.
+        """
+        probe = getattr(self.broker, "is_market_open", None)
+        if probe is None:
+            log.warning(
+                "%s cannot report market hours; treating the state as unknown",
+                type(self.broker).__name__,
+            )
+            return None
+        return probe()
+
+    def _held_symbols(self) -> set[str]:
+        """Symbols the broker already holds, empty if it cannot say."""
+        probe = getattr(self.broker, "open_symbols", None)
+        if probe is None:
+            log.warning(
+                "%s cannot report open positions; repeated runs may stack "
+                "positions in the same symbol",
+                type(self.broker).__name__,
+            )
+            return set()
+        try:
+            return {str(symbol).upper() for symbol in probe()}
+        except Exception as exc:  # a broker fault must not become a trade
+            log.warning("could not read open positions: %s", exc)
+            return set()
 
     def _build_order(self, signal: Signal, ran_at: _dt.datetime) -> Order:
         """Wrap a signal in a broker order, carrying its rationale along."""
@@ -181,6 +248,8 @@ def format_report(report: RunReport) -> str:
     if report.feed_errors:
         lines.append(f"  feed errors     : {len(report.feed_errors)}")
         lines.extend(f"      - {err}" for err in report.feed_errors)
+    for note in report.notes:
+        lines.append(f"  note            : {note}")
 
     if not report.signals:
         lines.append("\n  No company was named in the window; nothing to trade.")

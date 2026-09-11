@@ -16,7 +16,7 @@ import sys
 
 from .algorithm import AlgorithmConfig, WSJHeadlineAlgorithm, append_signal_log, format_report
 from .broker import AlpacaBroker, AlpacaPriceProvider, BrokerError, PaperBroker
-from .feed import DEFAULT_FEEDS, fetch_feed, headlines_from_files
+from .feed import DEFAULT_FEEDS, collect_headlines, fetch_feed, headlines_from_files
 from .strategy import StrategyConfig
 from .universe import Universe
 
@@ -88,6 +88,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually submit orders. Without it the run is a dry run.",
     )
     execution.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Preflight only: verify credentials, account state, shorting "
+            "permission, market hours and feed access, then exit without trading."
+        ),
+    )
+    execution.add_argument(
+        "--queue-when-closed",
+        action="store_true",
+        help=(
+            "With --broker alpaca --live, submit even when the market is closed. "
+            "Off by default: an order queued to an open hours away acts on "
+            "headlines that are no longer news."
+        ),
+    )
+    execution.add_argument(
+        "--allow-stacking",
+        action="store_true",
+        help=(
+            "Allow a new position in a symbol already held. Off by default, so a "
+            "scheduled run does not pyramid into a story that stays in the news."
+        ),
+    )
+    execution.add_argument(
         "--paper-marks",
         choices=("flat", "alpaca"),
         default="flat",
@@ -117,6 +142,97 @@ def build_parser() -> argparse.ArgumentParser:
     output.add_argument("-v", "--verbose", action="store_true", help="Log what the algorithm is doing.")
 
     return parser
+
+
+def run_preflight(broker, config, fetcher, broker_name: str) -> int:
+    """Check everything a scheduled run depends on, and trade nothing.
+
+    Returns 0 when the setup looks usable, 1 when something would stop it
+    working. Meant to be run once before trusting a schedule, and again after
+    any credential change.
+    """
+    problems: list[str] = []
+    print("Preflight\n")
+
+    print(f"  broker            : {broker_name}")
+    account = getattr(broker, "account", None)
+    if account is not None:
+        try:
+            details = account()
+        except BrokerError as exc:
+            problems.append(f"account unreachable: {exc}")
+            print(f"  account           : UNREACHABLE -- {exc}")
+        else:
+            status = details.get("status", "?")
+            print(f"  endpoint          : {getattr(broker, 'base_url', '?')}")
+            print(f"  account status    : {status}")
+            print(f"  buying power      : {details.get('buying_power', '?')}")
+            print(f"  cash              : {details.get('cash', '?')}")
+            shorting = details.get("shorting_enabled")
+            print(f"  shorting enabled  : {shorting}")
+            if details.get("trading_blocked"):
+                problems.append("the account has trading blocked")
+            if status not in ("ACTIVE", "?"):
+                problems.append(f"account status is {status}, not ACTIVE")
+            if shorting is False:
+                problems.append(
+                    "shorting is disabled, so every short signal will be refused; "
+                    "a margin account is required for the short half of this strategy"
+                )
+    else:
+        print("  account           : n/a for this broker")
+
+    clock = getattr(broker, "clock", None)
+    if clock is not None:
+        try:
+            state = clock()
+        except BrokerError as exc:
+            problems.append(f"market clock unreachable: {exc}")
+            print(f"  market            : UNREACHABLE -- {exc}")
+        else:
+            print(
+                f"  market            : {'OPEN' if state.get('is_open') else 'CLOSED'}"
+                f" (next open {state.get('next_open', '?')})"
+            )
+    else:
+        print("  market            : n/a for this broker")
+
+    held = getattr(broker, "open_symbols", None)
+    if held is not None:
+        try:
+            symbols = sorted(held())
+        except Exception as exc:
+            print(f"  open positions    : UNREADABLE -- {exc}")
+        else:
+            print(f"  open positions    : {', '.join(symbols) if symbols else 'none'}")
+
+    # Feed access is the other half: credentials are useless without headlines.
+    headlines, errors = collect_headlines(
+        feeds=config.feeds,
+        window_minutes=config.window_minutes,
+        now=None,
+        fetcher=fetcher,
+    )
+    print(f"  feeds reachable   : {len(config.feeds) - len(errors)}/{len(config.feeds)}")
+    print(f"  headlines in {config.window_minutes:>3}m : {len(headlines)}")
+    for error in errors:
+        print(f"      - {error}")
+    if len(errors) == len(config.feeds):
+        problems.append("no feed could be read, so there is nothing to trade on")
+
+    if problems:
+        print("\n  NOT READY")
+        for problem in problems:
+            print(f"    - {problem}")
+        return 1
+
+    print("\n  Ready. Nothing was traded by this check.")
+    if not headlines:
+        print(
+            "  Note: no headlines in the window right now. That is normal outside\n"
+            "  busy hours; it only means this run would have found nothing."
+        )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,6 +272,10 @@ def main(argv: list[str] | None = None) -> int:
             strategy=strategy,
             universe_path=args.universe,
             dry_run=not args.live,
+            skip_held_symbols=not args.allow_stacking,
+            require_market_open=(
+                args.broker == "alpaca" and args.live and not args.queue_when_closed
+            ),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -175,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     else:
         broker = PaperBroker()
+
+    if args.check:
+        return run_preflight(broker, config, fetcher, args.broker)
 
     if args.live and args.broker == "alpaca" and args.real_money:
         print(

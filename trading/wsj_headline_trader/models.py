@@ -135,6 +135,8 @@ class RunReport:
     signals: list[Signal] = field(default_factory=list)
     results: list[OrderResult] = field(default_factory=list)
     dry_run: bool = True
+    #: Run-level explanations, such as declining to trade a closed market.
+    notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable summary."""
@@ -145,6 +147,7 @@ class RunReport:
             "feeds_read": list(self.feeds_read),
             "feed_errors": list(self.feed_errors),
             "dry_run": self.dry_run,
+            "notes": list(self.notes),
             "signals": [
                 {
                     "ticker": s.ticker,
